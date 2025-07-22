@@ -42,7 +42,7 @@ A powerful web-based tool for real-time monitoring and analysis of HLS (HTTP Liv
 ### Quick Start
 1. **Clone the repository**:
    ```bash
-   git clone https://github.com/yourusername/live-hls-stream-monitor.git
+   git clone https://github.com/msahmarani/live-hls-stream-monitor.git
    cd live-hls-stream-monitor
    ```
 
