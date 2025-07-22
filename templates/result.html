@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Analysis Results - HLS Stream Analyzer</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1400px;
+            margin: 20px auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .back-link {
+            display: inline-block;
+            margin-bottom: 20px;
+            color: #007bff;
+            text-decoration: none;
+        }
+        .back-link:hover {
+            text-decoration: underline;
+        }
+        .summary {
+            background-color: #e9ecef;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 30px;
+        }
+        .charts-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+        .chart-container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 1px 5px rgba(0,0,0,0.1);
+        }
+        .segments-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+        .segments-table th,
+        .segments-table td {
+            padding: 8px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        .segments-table th {
+            background-color: #f8f9fa;
+            font-weight: bold;
+            position: sticky;
+            top: 0;
+        }
+        .segments-table tr:hover {
+            background-color: #f5f5f5;
+        }
+        .status-ok {
+            color: #28a745;
+            font-weight: bold;
+        }
+        .status-error {
+            color: #dc3545;
+            font-weight: bold;
+        }
+        .table-container {
+            max-height: 600px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="/" class="back-link">← Back to Home</a>
+        
+        <h1>Stream Analysis Results</h1>
+        
+        <div class="summary">
+            <p><strong>Playlist URL:</strong> {{ playlist_url }}</p>
+            <p><strong>Total Segments:</strong> {{ total_segments }}</p>
+            <p style="margin-top: 15px;">
+                <a href="/live/{{ playlist_url | urlencode }}" target="_blank" 
+                   style="background: #28a745; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block;">
+                    🔴 Launch Live Monitor
+                </a>
+                <span style="margin-left: 15px; font-size: 0.9em; color: #666;">
+                    Monitor this stream in real-time with auto-refresh
+                </span>
+            </p>
+        </div>
+        
+        <div class="charts-container">
+            <div class="chart-container">
+                <h3>Resolution Width per Segment</h3>
+                <canvas id="resolutionChart"></canvas>
+            </div>
+            <div class="chart-container">
+                <h3>Frame Rate per Segment</h3>
+                <canvas id="frameRateChart"></canvas>
+            </div>
+        </div>
+        
+        <h2>Segment Details</h2>
+        <div class="table-container">
+            <table class="segments-table">
+                <thead>
+                    <tr>
+                        <th>Index</th>
+                        <th>URI</th>
+                        <th>Duration</th>
+                        <th>Status</th>
+                        <th>Codec</th>
+                        <th>Resolution</th>
+                        <th>Frame Rate</th>
+                        <th>Bitrate</th>
+                        <th>Segment Duration</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for segment in segments %}
+                    <tr>
+                        <td>{{ segment.index }}</td>
+                        <td title="{{ segment.full_url }}">{{ segment.uri }}</td>
+                        <td>{{ "%.2f"|format(segment.duration) }}s</td>
+                        <td class="{% if segment.status_code == 200 %}status-ok{% else %}status-error{% endif %}">
+                            {{ segment.status_code }}
+                        </td>
+                        <td>{{ segment.codec }}</td>
+                        <td>{{ segment.resolution }}</td>
+                        <td>{{ "%.2f"|format(segment.frame_rate) }} fps</td>
+                        <td>
+                            {% if segment.bitrate > 0 %}
+                                {% if segment.bitrate >= 1000000 %}
+                                    {{ "%.1f"|format(segment.bitrate / 1000000) }} Mbps
+                                {% elif segment.bitrate >= 1000 %}
+                                    {{ "%.1f"|format(segment.bitrate / 1000) }} Kbps
+                                {% else %}
+                                    {{ segment.bitrate }} bps
+                                {% endif %}
+                            {% else %}
+                                Unknown
+                            {% endif %}
+                        </td>
+                        <td>{{ "%.2f"|format(segment.segment_duration) }}s</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        // Prepare data for charts
+        const segmentsData = JSON.parse('{{ segments | tojson | safe }}');
+        const labels = segmentsData.map(s => `Segment ${s.index}`);
+        const widths = segmentsData.map(s => s.width);
+        const frameRates = segmentsData.map(s => s.frame_rate);
+
+        // Resolution Chart
+        const resolutionCtx = document.getElementById('resolutionChart').getContext('2d');
+        new Chart(resolutionCtx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Width (pixels)',
+                    data: widths,
+                    borderColor: 'rgb(75, 192, 192)',
+                    backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                    tension: 0.1
+                }]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    y: {
+                        beginAtZero: true
+                    }
+                }
+            }
+        });
+
+        // Frame Rate Chart
+        const frameRateCtx = document.getElementById('frameRateChart').getContext('2d');
+        new Chart(frameRateCtx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Frame Rate (fps)',
+                    data: frameRates,
+                    borderColor: 'rgb(255, 99, 132)',
+                    backgroundColor: 'rgba(255, 99, 132, 0.2)',
+                    tension: 0.1
+                }]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    y: {
+                        beginAtZero: true
+                    }
+                }
+            }
+        });
+    </script>
+</body>
+</html>
