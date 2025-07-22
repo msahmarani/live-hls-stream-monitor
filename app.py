@@ -1,3 +1,20 @@
+"""
+Live HLS Stream Monitor
+
+A privacy-first, local-only HLS stream monitoring and analysis tool.
+
+Privacy Notice:
+- All processing is performed locally on your machine
+- No data is transmitted to external servers (except HLS streams you analyze)
+- Stream URLs and analysis results are not stored persistently
+- See PRIVACY.md for complete privacy policy
+
+Security Notice:
+- Runs on localhost (127.0.0.1) by default for security
+- SSL certificate verification disabled for HTTPS streams
+- See SECURITY.md for security considerations
+"""
+
 from flask import Flask, render_template, request, jsonify, redirect
 from flask_cors import CORS
 import m3u8
@@ -665,4 +682,6 @@ def health_check():
     })
 
 if __name__ == '__main__':
+    # Security: Binds to localhost only by default
+    # For production deployment, set debug=False and configure proper security
     app.run(host='127.0.0.1', port=8181, debug=True)
