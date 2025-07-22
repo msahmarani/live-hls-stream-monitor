@@ -82,7 +82,7 @@ def get_ffprobe_info(segment_url):
             segment_url
         ]
         
-        print(f"Running ffprobe on: {segment_url}")
+        print(f"Running ffprobe analysis...")
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         
         if result.returncode == 0:
@@ -185,9 +185,9 @@ def get_ffprobe_info(segment_url):
             print(f"ffprobe error (code {result.returncode}): {result.stderr}")
             
     except subprocess.TimeoutExpired:
-        print(f"ffprobe timeout for {segment_url}")
+        print(f"ffprobe timeout occurred")
     except Exception as e:
-        print(f"Error getting ffprobe info for {segment_url}: {e}")
+        print(f"Error getting ffprobe info: {e}")
     
     return get_fallback_info()
 
@@ -265,17 +265,17 @@ def check_ffprobe_availability():
 @app.route('/live/<path:playlist_url>')
 def live_monitor(playlist_url):
     """Live monitoring page for a playlist"""
-    print(f"Live monitor requested for URL: {playlist_url}")
+    print(f"Live monitor requested")
     import urllib.parse
     decoded_url = urllib.parse.unquote(playlist_url)
-    print(f"Decoded URL: {decoded_url}")
+    print(f"Starting live monitoring session")
     return render_template('live.html', playlist_url=decoded_url)
 def live_monitor(playlist_url):
     """Live monitoring page for a playlist"""
-    print(f"Live monitor requested for URL: {playlist_url}")
+    print(f"Live monitor requested")
     import urllib.parse
     decoded_url = urllib.parse.unquote(playlist_url)
-    print(f"Decoded URL: {decoded_url}")
+    print(f"Starting live monitoring session")
     return render_template('live.html', playlist_url=decoded_url)
 
 @app.route('/api/live-metrics/<path:playlist_url>')
@@ -285,13 +285,13 @@ def get_live_metrics(playlist_url):
         # Decode the URL
         import urllib.parse
         playlist_url = urllib.parse.unquote(playlist_url)
-        print(f"Loading playlist: {playlist_url}")
+        print(f"Loading playlist...")
         
         # Load and analyze the playlist with manual SSL handling
         session = requests.Session()
         session.verify = False
         
-        print(f"Fetching playlist manually: {playlist_url}")
+        print(f"Fetching playlist...")
         response = session.get(playlist_url, timeout=10)
         print(f"HTTP Status: {response.status_code}")
         
@@ -325,7 +325,7 @@ def get_live_metrics(playlist_url):
                 print(f"Using first variant bitrate: {master_bitrate} bps")
                 
                 variant_url = urljoin(playlist_url, first_variant.uri)
-                print(f"Loading variant for analysis: {variant_url}")
+                print(f"Loading variant for analysis...")
                 
                 # Load variant with manual SSL handling
                 variant_response = session.get(variant_url, timeout=10)
@@ -344,7 +344,7 @@ def get_live_metrics(playlist_url):
         if playlist.segments:
             base_url = analysis_url.rsplit('/', 1)[0] + '/'
             first_segment_url = urljoin(base_url, playlist.segments[0].uri)
-            print(f"Analyzing first segment: {first_segment_url}")
+            print(f"Analyzing first segment...")
             master_video_info = get_ffprobe_info(first_segment_url)
             
             # Use master playlist bitrate if available and ffprobe didn't find one
@@ -398,7 +398,7 @@ def get_live_metrics(playlist_url):
         # Fast segment status checking only (no individual ffprobe calls)
         for i, segment in enumerate(recent_segments):
             segment_url = urljoin(base_url, segment.uri)
-            print(f"Checking segment {i+1}/{len(recent_segments)} status: {segment.uri}")
+            print(f"Checking segment {i+1}/{len(recent_segments)} status...")
             
             try:
                 status_code = check_segment_status(segment_url)
@@ -472,7 +472,7 @@ def test_url(playlist_url):
         import urllib.parse
         playlist_url = urllib.parse.unquote(playlist_url)
         
-        print(f"Testing URL: {playlist_url}")
+        print(f"Testing URL connectivity...")
         
         # Test basic connectivity
         response = requests.head(playlist_url, timeout=10)
@@ -539,7 +539,7 @@ def test_bitrate():
         session = requests.Session()
         session.verify = False
         
-        print(f"Fetching playlist manually: {playlist_url}")
+        print(f"Testing with sample playlist...")
         response = session.get(playlist_url, timeout=10)
         print(f"HTTP Status: {response.status_code}")
         
