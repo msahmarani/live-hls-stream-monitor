@@ -32,6 +32,23 @@ A powerful web-based tool for real-time monitoring and analysis of HLS (HTTP Liv
 - **SSL/HTTPS Support**: Handle secure streaming protocols
 - **Error Resilience**: Graceful fallback for missing dependencies
 - **Cross-Platform**: Works on Windows, macOS, and Linux
+- **Privacy-First**: All processing is local, no data transmission to external servers
+
+## 🔒 Privacy & Security
+
+### Data Privacy
+- **Local Processing Only**: All stream analysis happens on your machine
+- **No Data Collection**: Stream URLs and analysis results are not stored
+- **No External Transmission**: Data is never sent to third-party servers
+- **Open Source Transparency**: Full source code available for review
+
+### Security Features
+- **Local Network Binding**: Runs on localhost by default (127.0.0.1:8181)
+- **SSL/HTTPS Support**: Secure handling of HTTPS streaming protocols
+- **Input Validation**: URL validation to prevent malicious requests
+- **Optional Dependencies**: System metrics and advanced features are opt-in
+
+**📄 Full Privacy Policy**: See [PRIVACY.md](PRIVACY.md) for complete privacy details.
 
 ## 🛠 Installation
 
@@ -184,6 +201,18 @@ Without psutil, the application will use simulated metrics data.
 **Port conflicts**:
 - Change the port in `app.py` if 8181 is in use
 - Ensure no firewall blocking on the chosen port
+
+### Security Considerations
+
+**Network Access**:
+- Application binds to localhost (127.0.0.1) by default for security
+- Only change host binding if you understand the security implications
+- Consider using a reverse proxy (nginx) for external access
+
+**Stream URL Validation**:
+- Only analyze trusted HLS streams
+- Be cautious with streams from unknown sources
+- The application validates URLs but cannot guarantee stream content safety
 
 ## 📄 License
 

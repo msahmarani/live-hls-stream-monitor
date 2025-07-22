@@ -55,6 +55,7 @@ Enhancement suggestions are welcome! Please provide:
 - Ensure **error handling** works correctly
 - Test with and without **FFmpeg/FFprobe** installed
 - Verify **cross-platform compatibility** when possible
+- **Privacy compliance**: Ensure no data is stored or transmitted unnecessarily
 
 ### Documentation
 
