@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Live HLS Monitor - HLS Stream Analyzer</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Optimized performance scripts -->
+    <script src="/static/js/optimizations.js"></script>
     <!-- Cockpit.js for advanced metrics -->
     <script src="https://unpkg.com/@cockpit/core@latest/dist/cockpit.min.js"></script>
     <script src="https://unpkg.com/@cockpit/metrics@latest/dist/cockpit-metrics.min.js"></script>
@@ -258,6 +260,7 @@
                 <option value="30000">30 seconds</option>
                 <option value="60000">1 minute</option>
             </select>
+            <span id="recommended-interval" style="margin-left: 10px; color: #28a745; font-size: 0.9em;"></span>
         </span>
     </div>
     
@@ -543,15 +546,15 @@
             });
         }
         
-        // Refresh data
+        // Refresh data (optimized)
         async function refreshData() {
             try {
-                document.getElementById('connection-status').textContent = 'Updating...';
+                domOptimizer.queueUpdate('connection-status', 'Updating...');
                 
                 const encodedUrl = encodeURIComponent(playlistUrl);
-                console.log('Making API call to:', `/api/live-metrics/${encodedUrl}`);
+                console.log('Making optimized API call to:', `/api/live-metrics/${encodedUrl}`);
                 
-                const response = await fetch(`/api/live-metrics/${encodedUrl}`);
+                const response = await performanceOptimizer.throttledFetch(`/api/live-metrics/${encodedUrl}`);
                 console.log('API Response status:', response.status);
                 
                 if (!response.ok) {
@@ -565,95 +568,223 @@
                     throw new Error(data.error);
                 }
                 
-                // Update metrics
-                document.getElementById('total-segments').textContent = data.total_segments;
-                document.getElementById('success-rate').textContent = data.stats.success_rate.toFixed(1) + '%';
-                document.getElementById('avg-duration').textContent = data.stats.avg_duration.toFixed(2);
-                document.getElementById('avg-bitrate').textContent = formatBitrate(data.stats.avg_bitrate);
-                document.getElementById('total-duration').textContent = formatDuration(data.stats.total_duration);
+                // Update adaptive refresh interval
+                if (data.performance && data.performance.recommended_refresh_interval) {
+                    performanceOptimizer.updateAdaptiveInterval(
+                        data.stats.success_rate, 
+                        data.performance.recommended_refresh_interval
+                    );
+                    
+                    // Update UI to show recommended interval
+                    const intervalSelect = document.getElementById('refresh-interval');
+                    if (intervalSelect) {
+                        const recommendedMs = data.performance.recommended_refresh_interval * 1000;
+                        domOptimizer.queueUpdate('recommended-interval', 
+                            `Recommended: ${data.performance.recommended_refresh_interval}s`);
+                    }
+                }
+                
+                // Batch DOM updates for better performance
+                const updates = [
+                    ['total-segments', data.total_segments],
+                    ['success-rate', data.stats.success_rate.toFixed(1) + '%'],
+                    ['avg-duration', data.stats.avg_duration.toFixed(2)],
+                    ['avg-bitrate', utils.formatBitrate(data.stats.avg_bitrate)],
+                    ['total-duration', utils.formatDuration(data.stats.total_duration)],
+                    ['last-update', new Date().toLocaleTimeString()],
+                    ['connection-status', 'Connected']
+                ];
+                
+                updates.forEach(([id, content]) => {
+                    domOptimizer.queueUpdate(id, content);
+                });
                 
                 // Update video info
                 if (data.video_info) {
-                    document.getElementById('codec-info').textContent = data.video_info.codec.toUpperCase();
-                    document.getElementById('resolution-info').textContent = data.video_info.resolution;
-                    document.getElementById('framerate-info').textContent = data.video_info.frame_rate.toFixed(2) + ' fps';
-                    document.getElementById('video-bitrate').textContent = formatBitrate(data.video_info.video_bitrate);
+                    const videoUpdates = [
+                        ['codec-info', data.video_info.codec.toUpperCase()],
+                        ['resolution-info', data.video_info.resolution],
+                        ['framerate-info', data.video_info.frame_rate.toFixed(2) + ' fps'],
+                        ['video-bitrate', utils.formatBitrate(data.video_info.video_bitrate)]
+                    ];
+                    
+                    videoUpdates.forEach(([id, content]) => {
+                        domOptimizer.queueUpdate(id, content);
+                    });
                 }
                 
                 // Update audio info
                 if (data.audio_info) {
-                    document.getElementById('audio-codec').textContent = data.audio_info.codec.toUpperCase();
-                    document.getElementById('sample-rate').textContent = data.audio_info.sample_rate > 0 ? 
-                        (data.audio_info.sample_rate / 1000).toFixed(1) + ' kHz' : 'Unknown';
-                    document.getElementById('channels').textContent = data.audio_info.channel_layout;
-                    document.getElementById('audio-bitrate').textContent = formatBitrate(data.audio_info.audio_bitrate);
+                    const audioUpdates = [
+                        ['audio-codec', data.audio_info.codec.toUpperCase()],
+                        ['sample-rate', data.audio_info.sample_rate > 0 ? 
+                            (data.audio_info.sample_rate / 1000).toFixed(1) + ' kHz' : 'Unknown'],
+                        ['channels', data.audio_info.channel_layout],
+                        ['audio-bitrate', utils.formatBitrate(data.audio_info.audio_bitrate)]
+                    ];
+                    
+                    audioUpdates.forEach(([id, content]) => {
+                        domOptimizer.queueUpdate(id, content);
+                    });
                 }
                 
-                document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
-                document.getElementById('connection-status').textContent = 'Connected';
+                // Update segments table with optimized DOM manipulation
+                updateSegmentsTable(data.recent_segments);
                 
-                // Update segments table
-                const tbody = document.getElementById('segments-tbody');
-                tbody.innerHTML = '';
-                
-                data.recent_segments.forEach(segment => {
-                    const row = tbody.insertRow();
-                    row.innerHTML = `
-                        <td>${segment.index}</td>
-                        <td>${segment.uri.substring(0, 50)}${segment.uri.length > 50 ? '...' : ''}</td>
-                        <td>${segment.duration.toFixed(2)}s</td>
-                        <td class="${segment.status_code === 200 ? 'status-success' : 'status-failed'}">${segment.status_code}</td>
-                        <td>${new Date(segment.timestamp).toLocaleTimeString()}</td>
-                        <td><button class="btn" onclick="getSegmentDetails('${segment.uri}')" style="font-size: 12px; padding: 5px 10px;">Details</button></td>
-                    `;
-                });
-                
-                // Update charts
+                // Update charts with batched updates
                 const timestamp = new Date().toLocaleTimeString();
-                
-                // Response Time Chart (simulated for now)
-                if (responseTimeChart.data.labels.length > 20) {
-                    responseTimeChart.data.labels.shift();
-                    responseTimeChart.data.datasets[0].data.shift();
-                }
-                responseTimeChart.data.labels.push(timestamp);
-                responseTimeChart.data.datasets[0].data.push(Math.random() * 500 + 100);
-                responseTimeChart.update();
-                
-                // Bitrate Chart
-                if (bitrateChart.data.labels.length > 20) {
-                    bitrateChart.data.labels.shift();
-                    bitrateChart.data.datasets[0].data.shift();
-                }
-                bitrateChart.data.labels.push(timestamp);
-                bitrateChart.data.datasets[0].data.push(data.stats.avg_bitrate);
-                bitrateChart.update();
-                
-                // Success Rate Chart
-                if (successRateChart.data.labels.length > 20) {
-                    successRateChart.data.labels.shift();
-                    successRateChart.data.datasets[0].data.shift();
-                }
-                successRateChart.data.labels.push(timestamp);
-                successRateChart.data.datasets[0].data.push(data.stats.success_rate);
-                successRateChart.update();
-                
-                // Duration Chart
-                if (durationChart.data.labels.length > 20) {
-                    durationChart.data.labels.shift();
-                    durationChart.data.datasets[0].data.shift();
-                }
-                durationChart.data.labels.push(timestamp);
-                durationChart.data.datasets[0].data.push(data.stats.avg_duration);
-                durationChart.update();
+                updateChartsOptimized(data, timestamp);
                 
                 // Update Cockpit.js metrics
                 updateCockpitMetrics(data);
                 
             } catch (error) {
                 console.error('Error refreshing data:', error);
-                document.getElementById('connection-status').textContent = 'Error: ' + error.message;
+                domOptimizer.queueUpdate('connection-status', 'Error: ' + error.message);
             }
+        }
+        
+        function updateSegmentsTable(segments) {
+            const tbody = document.getElementById('segments-tbody');
+            if (!tbody) return;
+            
+            // Use DocumentFragment for better performance
+            const fragment = document.createDocumentFragment();
+            
+            segments.forEach(segment => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${segment.index}</td>
+                    <td title="${segment.uri}">${segment.uri.substring(0, 50)}${segment.uri.length > 50 ? '...' : ''}</td>
+                    <td>${segment.duration.toFixed(2)}s</td>
+                    <td class="${segment.status_code === 200 ? 'status-success' : 'status-failed'}">${segment.status_code}</td>
+                    <td>${new Date(segment.timestamp).toLocaleTimeString()}</td>
+                    <td><button class="btn" onclick="getSegmentDetails('${segment.uri}')" style="font-size: 12px; padding: 5px 10px;">Details</button></td>
+                `;
+                fragment.appendChild(row);
+            });
+            
+            // Single DOM update
+            tbody.innerHTML = '';
+            tbody.appendChild(fragment);
+        }
+
+        function updateChartsOptimized(data, timestamp) {
+            // Queue chart updates for batched processing
+            chartManager.queueUpdate('responseTime', Math.random() * 500 + 100);
+            chartManager.queueUpdate('bitrate', data.stats.avg_bitrate);
+            chartManager.queueUpdate('successRate', data.stats.success_rate);
+            chartManager.queueUpdate('duration', data.stats.avg_duration);
+        }
+
+        function initChartsOptimized() {
+            // Response Time Chart
+            const responseTimeCtx = document.getElementById('responseTimeChart').getContext('2d');
+            const responseTimeChart = new Chart(responseTimeCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Response Time (ms)',
+                        data: [],
+                        borderColor: 'rgb(75, 192, 192)',
+                        backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                        tension: 0.1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    animation: false, // Disable animations for better performance
+                    scales: {
+                        y: { beginAtZero: true }
+                    }
+                }
+            });
+            chartManager.registerChart('responseTime', responseTimeChart);
+
+            // Bitrate Chart
+            const bitrateCtx = document.getElementById('bitrateChart').getContext('2d');
+            const bitrateChart = new Chart(bitrateCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Average Bitrate (bps)',
+                        data: [],
+                        borderColor: 'rgb(255, 159, 64)',
+                        backgroundColor: 'rgba(255, 159, 64, 0.2)',
+                        tension: 0.1,
+                        fill: true
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    animation: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: {
+                                callback: function(value) {
+                                    return utils.formatBitrate(value);
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+            chartManager.registerChart('bitrate', bitrateChart);
+
+            // Success Rate Chart
+            const successRateCtx = document.getElementById('successRateChart').getContext('2d');
+            const successRateChart = new Chart(successRateCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Success Rate (%)',
+                        data: [],
+                        borderColor: 'rgb(255, 99, 132)',
+                        backgroundColor: 'rgba(255, 99, 132, 0.2)',
+                        tension: 0.1,
+                        fill: true
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    animation: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: 100
+                        }
+                    }
+                }
+            });
+            chartManager.registerChart('successRate', successRateChart);
+
+            // Duration Chart
+            const durationCtx = document.getElementById('durationChart').getContext('2d');
+            const durationChart = new Chart(durationCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Average Duration (s)',
+                        data: [],
+                        borderColor: 'rgb(153, 102, 255)',
+                        backgroundColor: 'rgba(153, 102, 255, 0.2)',
+                        tension: 0.1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    animation: false,
+                    scales: {
+                        y: { beginAtZero: true }
+                    }
+                }
+            });
+            chartManager.registerChart('duration', durationChart);
         }
         
         function toggleAutoRefresh() {
@@ -665,12 +796,48 @@
                 btn.textContent = '▶️ Start Auto Refresh';
                 btn.classList.remove('active');
             } else {
-                const interval = document.getElementById('refresh-interval').value;
-                autoRefreshInterval = setInterval(refreshData, parseInt(interval));
+                // Use adaptive interval if available, otherwise use selected interval
+                const selectedInterval = document.getElementById('refresh-interval').value;
+                const adaptiveInterval = performanceOptimizer.adaptiveInterval;
+                const interval = Math.max(parseInt(selectedInterval), adaptiveInterval);
+                
+                autoRefreshInterval = setInterval(refreshData, interval);
                 btn.textContent = '⏹️ Stop Auto Refresh';
                 btn.classList.add('active');
+                
+                console.log(`Auto-refresh started with ${interval}ms interval`);
             }
         }
+
+        // Optimized initialization
+        document.addEventListener('DOMContentLoaded', async function() {
+            console.log('Page loaded, initializing optimized version...');
+            
+            // Test connectivity first
+            const isHealthy = await testConnectivity();
+            if (!isHealthy) {
+                domOptimizer.queueUpdate('connection-status', 'Server not responding');
+                return;
+            }
+            
+            // Initialize optimized charts
+            initChartsOptimized();
+            initializeCockpitMetrics();
+            
+            // Start with initial data fetch
+            await refreshData();
+            
+            // Set up performance monitoring
+            setInterval(async () => {
+                try {
+                    const response = await performanceOptimizer.throttledFetch('/api/performance-stats');
+                    const stats = await response.json();
+                    console.log('Performance stats:', stats);
+                } catch (error) {
+                    console.warn('Could not fetch performance stats:', error);
+                }
+            }, 60000); // Every minute
+        });
         
         async function getSegmentDetails(segmentUri) {
             try {
@@ -679,7 +846,7 @@
                 const fullUrl = baseUrl + segmentUri;
                 const encodedUrl = encodeURIComponent(fullUrl);
                 
-                const response = await fetch(`/api/segment-details/${encodedUrl}`);
+                const response = await performanceOptimizer.throttledFetch(`/api/segment-details/${encodedUrl}`);
                 const data = await response.json();
                 
                 if (data.error) {
@@ -693,7 +860,7 @@
                      `Codec: ${data.codec}\\n` +
                      `Resolution: ${data.width}x${data.height}\\n` +
                      `Frame Rate: ${data.frame_rate} fps\\n` +
-                     `Bitrate: ${formatBitrate(data.bitrate)}\\n` +
+                     `Bitrate: ${utils.formatBitrate(data.bitrate)}\\n` +
                      `Duration: ${data.duration} seconds`);
                      
             } catch (error) {
@@ -701,40 +868,11 @@
             }
         }
         
-        function formatDuration(seconds) {
-            const hours = Math.floor(seconds / 3600);
-            const minutes = Math.floor((seconds % 3600) / 60);
-            const secs = Math.floor(seconds % 60);
-            
-            if (hours > 0) {
-                return `${hours}h ${minutes}m ${secs}s`;
-            } else if (minutes > 0) {
-                return `${minutes}m ${secs}s`;
-            } else {
-                return `${secs}s`;
-            }
-        }
-        
-        function formatBitrate(bps) {
-            if (bps === 0) return '0 bps';
-            
-            const units = ['bps', 'Kbps', 'Mbps', 'Gbps'];
-            let size = bps;
-            let unitIndex = 0;
-            
-            while (size >= 1000 && unitIndex < units.length - 1) {
-                size /= 1000;
-                unitIndex++;
-            }
-            
-            return `${size.toFixed(1)} ${units[unitIndex]}`;
-        }
-        
         // Test API connectivity
         async function testConnectivity() {
             try {
                 console.log('Testing API connectivity...');
-                const response = await fetch('/api/health-check');
+                const response = await performanceOptimizer.throttledFetch('/api/health-check');
                 const data = await response.json();
                 console.log('Health check response:', data);
                 return data.status === 'healthy';
@@ -743,13 +881,6 @@
                 return false;
             }
         }
-        
-        // Cockpit.js Metrics Functions
-        let cockpitMetrics = {
-            startTime: Date.now(),
-            viewers: 1,
-            errors: []
-        };
         
         function initializeCockpitMetrics() {
             console.log('Initializing Cockpit.js metrics...');

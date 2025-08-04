@@ -15,7 +15,7 @@ Security Notice:
 - See SECURITY.md for security considerations
 """
 
-from flask import Flask, render_template, request, jsonify, redirect
+from flask import Flask, render_template, request, jsonify, redirect, g
 from flask_cors import CORS
 import m3u8
 import requests
@@ -28,17 +28,35 @@ import os
 import time
 import threading
 from datetime import datetime
+import psutil
+import logging
+
+# Import optimizations
+from optimizations import (
+    OptimizedHTTPSession, 
+    timed_cache, 
+    check_segments_concurrent,
+    CircularBuffer,
+    optimized_ffprobe,
+    process_segments_batch,
+    performance_monitor,
+    AdaptiveRefresh,
+    cleanup_resources
+)
 
 # Disable SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+# Configure logging for better performance monitoring
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
 
-# Global storage for live metrics
+# Global storage for live metrics (optimized)
 live_metrics = {
     'current_playlist': None,
-    'segments': [],
+    'segments': CircularBuffer(maxsize=100),  # Use circular buffer to limit memory
     'stats': {
         'total_segments': 0,
         'failed_segments': 0,
@@ -46,8 +64,9 @@ live_metrics = {
         'avg_frame_rate': 0,
         'total_duration': 0
     },
-    'history': [],
-    'last_updated': None
+    'history': CircularBuffer(maxsize=50),  # Limit history size
+    'last_updated': None,
+    'adaptive_refresh': AdaptiveRefresh()
 }
 
 # Add JSON filter for templates
@@ -63,31 +82,16 @@ def is_valid_url(url):
     except:
         return False
 
+@timed_cache(seconds=300)  # Cache for 5 minutes
 def get_ffprobe_info(segment_url):
-    """Get video and audio info from segment using ffprobe"""
+    """Get video and audio info from segment using ffprobe (optimized)"""
+    start_time = time.time()
+    
     try:
-        # First check if ffprobe is available
-        cmd_test = ['ffprobe', '-version']
-        test_result = subprocess.run(cmd_test, capture_output=True, text=True, timeout=5)
-        if test_result.returncode != 0:
-            print("ffprobe not found or not working")
-            return get_fallback_info()
-            
-        # Enhanced ffprobe command with video and audio information
-        cmd = [
-            'ffprobe', 
-            '-v', 'error',  # Show only errors
-            '-show_entries', 'stream=codec_name,codec_type,width,height,r_frame_rate,bit_rate,sample_rate,channels:format=duration,bit_rate,size',
-            '-of', 'json',
-            segment_url
-        ]
+        # Use optimized ffprobe function
+        data = optimized_ffprobe(segment_url)
         
-        print(f"Running ffprobe analysis...")
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        
-        if result.returncode == 0:
-            data = json.loads(result.stdout)
-            
+        if data:
             # Extract stream info
             streams = data.get('streams', [])
             video_stream = None
@@ -169,7 +173,7 @@ def get_ffprobe_info(segment_url):
                     except:
                         total_bitrate = 0
             
-            return {
+            result = {
                 'video': video_info,
                 'audio': audio_info,
                 'duration': float(format_info.get('duration', 0)),
@@ -181,14 +185,19 @@ def get_ffprobe_info(segment_url):
                 'frame_rate': video_info['frame_rate'],
                 'bitrate': total_bitrate or video_info['bitrate']
             }
-        else:
-            print(f"ffprobe error (code {result.returncode}): {result.stderr}")
             
-    except subprocess.TimeoutExpired:
-        print(f"ffprobe timeout occurred")
+            performance_monitor.record_cache_hit()
+            return result
+        else:
+            logging.warning(f"ffprobe returned no data for {segment_url}")
+            
     except Exception as e:
-        print(f"Error getting ffprobe info: {e}")
+        logging.error(f"Error getting ffprobe info: {e}")
+    finally:
+        duration = time.time() - start_time
+        performance_monitor.record_request_time(duration)
     
+    performance_monitor.record_cache_miss()
     return get_fallback_info()
 
 def get_fallback_info():
@@ -218,11 +227,12 @@ def get_fallback_info():
     }
 
 def check_segment_status(url):
-    """Check HTTP status of a segment"""
+    """Check HTTP status of a segment (optimized)"""
     try:
-        response = requests.head(url, timeout=10, verify=False)
+        session = OptimizedHTTPSession().get_session()
+        response = session.head(url, timeout=(2, 5))  # Faster timeout
         return response.status_code
-    except:
+    except Exception:
         return 0
 
 @app.route('/')
@@ -280,27 +290,28 @@ def live_monitor(playlist_url):
 
 @app.route('/api/live-metrics/<path:playlist_url>')
 def get_live_metrics(playlist_url):
-    """API endpoint for live metrics"""
+    """API endpoint for live metrics (optimized)"""
+    start_time = time.time()
+    
     try:
         # Decode the URL
         import urllib.parse
         playlist_url = urllib.parse.unquote(playlist_url)
-        print(f"Loading playlist...")
+        logging.info(f"Processing live metrics for: {playlist_url}")
         
-        # Load and analyze the playlist with manual SSL handling
-        session = requests.Session()
-        session.verify = False
+        # Use optimized session
+        session = OptimizedHTTPSession().get_session()
         
-        print(f"Fetching playlist...")
-        response = session.get(playlist_url, timeout=10)
-        print(f"HTTP Status: {response.status_code}")
+        logging.info("Fetching playlist...")
+        response = session.get(playlist_url, timeout=(5, 10))
+        logging.info(f"HTTP Status: {response.status_code}")
         
         if response.status_code != 200:
             raise Exception(f"HTTP {response.status_code} when fetching playlist")
         
         # Parse with m3u8
         playlist = m3u8.loads(response.text)
-        print(f"Playlist loaded successfully. Is variant: {playlist.is_variant}")
+        logging.info(f"Playlist loaded successfully. Is variant: {playlist.is_variant}")
         
         analysis_url = playlist_url
         master_video_info = None
@@ -312,158 +323,119 @@ def get_live_metrics(playlist_url):
         if playlist.is_variant:
             # For master playlists, get bitrate from playlist info and analyze first variant
             if playlist.playlists:
-                # Debug: print all available variants with their bitrates
-                print(f"Found {len(playlist.playlists)} variants:")
-                for i, variant in enumerate(playlist.playlists):
-                    bandwidth = variant.stream_info.bandwidth if variant.stream_info else 0
-                    resolution = variant.stream_info.resolution if variant.stream_info else None
-                    print(f"  Variant {i}: {bandwidth} bps, resolution: {resolution}")
-                
                 # Get bitrate from master playlist (first variant)
                 first_variant = playlist.playlists[0]
                 master_bitrate = first_variant.stream_info.bandwidth if first_variant.stream_info else 0
-                print(f"Using first variant bitrate: {master_bitrate} bps")
+                logging.info(f"Using first variant bitrate: {master_bitrate} bps")
                 
                 variant_url = urljoin(playlist_url, first_variant.uri)
-                print(f"Loading variant for analysis...")
                 
-                # Load variant with manual SSL handling
-                variant_response = session.get(variant_url, timeout=10)
+                # Load variant with optimized session
+                variant_response = session.get(variant_url, timeout=(5, 10))
                 if variant_response.status_code == 200:
                     playlist = m3u8.loads(variant_response.text)
+                    analysis_url = variant_url
                 else:
-                    print(f"Failed to load variant: HTTP {variant_response.status_code}")
-                    # Keep original master playlist
-                    
-                analysis_url = variant_url
-        else:
-            analysis_url = playlist_url
+                    logging.warning(f"Failed to load variant: HTTP {variant_response.status_code}")
         
-        # Analyze first segment for video details
+        # Analyze first segment for video details (cached)
         master_video_info = None
         if playlist.segments:
             base_url = analysis_url.rsplit('/', 1)[0] + '/'
             first_segment_url = urljoin(base_url, playlist.segments[0].uri)
-            print(f"Analyzing first segment...")
+            logging.info("Analyzing first segment...")
             master_video_info = get_ffprobe_info(first_segment_url)
             
             # Use master playlist bitrate if available and ffprobe didn't find one
             if master_bitrate > 0:
-                # If ffprobe didn't find bitrates, estimate them from master playlist
                 if master_video_info['total_bitrate'] == 0:
                     master_video_info['total_bitrate'] = master_bitrate
-                    master_video_info['bitrate'] = master_bitrate  # Legacy compatibility
-                    
-                    # Estimate video/audio split if individual streams don't have bitrates
-                    if master_video_info['video']['bitrate'] == 0 and master_video_info['audio']['bitrate'] == 0:
-                        # Typical audio bitrate is 128-256k, assume 256k max for audio
-                        estimated_audio_bitrate = min(256000, master_bitrate * 0.1)  # 10% or 256k, whichever is smaller
-                        estimated_video_bitrate = master_bitrate - estimated_audio_bitrate
-                        
-                        master_video_info['video']['bitrate'] = int(estimated_video_bitrate)
-                        master_video_info['audio']['bitrate'] = int(estimated_audio_bitrate)
-                        print(f"Estimated video bitrate: {estimated_video_bitrate}, audio bitrate: {estimated_audio_bitrate}")
+                    master_video_info['bitrate'] = master_bitrate
                 
-                print(f"Using master playlist bitrate: {master_bitrate}")
-            
-            print(f"Final video info: {master_video_info}")
+                # Estimate video bitrate if not found by ffprobe
+                if master_video_info['video']['bitrate'] == 0 and master_bitrate > 0:
+                    audio_bitrate = master_video_info['audio']['bitrate']
+                    if audio_bitrate > 0:
+                        # Use actual audio bitrate from ffprobe
+                        estimated_video_bitrate = master_bitrate - audio_bitrate
+                    else:
+                        # Estimate both video and audio
+                        estimated_audio_bitrate = min(256000, master_bitrate * 0.1)
+                        estimated_video_bitrate = master_bitrate - estimated_audio_bitrate
+                        master_video_info['audio']['bitrate'] = int(estimated_audio_bitrate)
+                    
+                    master_video_info['video']['bitrate'] = max(0, int(estimated_video_bitrate))
+                    logging.info(f"Estimated video bitrate: {master_video_info['video']['bitrate']}, audio bitrate: {master_video_info['audio']['bitrate']}")
         
-        # Fallback if all analysis failed
+        # Fallback if analysis failed
         if not master_video_info:
             master_video_info = get_fallback_info()
         
-        print(f"Final video info: {master_video_info}")
-        print(f"Total segments found: {len(playlist.segments)}")
-        
-        # Analyze recent segments (last 5 for faster response)
+        # Analyze recent segments with batching (optimized)
         base_url = analysis_url.rsplit('/', 1)[0] + '/'
         recent_segments = playlist.segments[-5:] if len(playlist.segments) > 5 else playlist.segments
+        
+        # Use optimized batch processing
+        segment_results = process_segments_batch(recent_segments, base_url, batch_size=3)
+        
+        # Calculate statistics
+        success_count = sum(1 for seg in segment_results if seg['status_code'] == 200)
+        total_duration = sum(seg['duration'] for seg in segment_results)
+        success_rate = (success_count / len(segment_results)) * 100 if segment_results else 0
+        
+        # Record success rate for adaptive refresh
+        live_metrics['adaptive_refresh'].record_success_rate(success_rate)
         
         live_data = {
             'timestamp': datetime.now().isoformat(),
             'total_segments': len(playlist.segments),
-            'recent_segments': [],
+            'recent_segments': segment_results,
             'stats': {
-                'avg_duration': 0,
-                'success_rate': 0,
+                'avg_duration': total_duration / len(segment_results) if segment_results else 0,
+                'success_rate': success_rate,
                 'total_duration': sum(seg.duration for seg in playlist.segments),
-                'avg_bitrate': 0,
-                'total_bitrate_samples': 0
+                'avg_bitrate': master_video_info['total_bitrate'] if master_video_info['total_bitrate'] > 0 else master_bitrate,
+                'video_bitrate': master_video_info['video']['bitrate'],
+                'audio_bitrate': master_video_info['audio']['bitrate']
+            },
+            'video_info': {
+                'codec': master_video_info['video']['codec'],
+                'width': master_video_info['video']['width'],
+                'height': master_video_info['video']['height'],
+                'resolution': f"{master_video_info['video']['width']}x{master_video_info['video']['height']}" if master_video_info['video']['width'] > 0 else "Unknown",
+                'frame_rate': master_video_info['video']['frame_rate'],
+                'video_bitrate': master_video_info['video']['bitrate'],
+                'duration': master_video_info['duration'],
+                'source': 'segment_analysis'
+            },
+            'audio_info': {
+                'codec': master_video_info['audio']['codec'],
+                'sample_rate': master_video_info['audio']['sample_rate'],
+                'channels': master_video_info['audio']['channels'],
+                'audio_bitrate': master_video_info['audio']['bitrate'],
+                'channel_layout': f"{master_video_info['audio']['channels']} ch" if master_video_info['audio']['channels'] > 0 else "Unknown"
+            },
+            'performance': {
+                'recommended_refresh_interval': live_metrics['adaptive_refresh'].get_optimal_interval()
             }
         }
         
-        success_count = 0
-        total_duration = 0
+        # Store in circular buffer
+        live_metrics['segments'].append(live_data)
+        live_metrics['last_updated'] = datetime.now()
         
-        # Fast segment status checking only (no individual ffprobe calls)
-        for i, segment in enumerate(recent_segments):
-            segment_url = urljoin(base_url, segment.uri)
-            print(f"Checking segment {i+1}/{len(recent_segments)} status...")
-            
-            try:
-                status_code = check_segment_status(segment_url)
-                if status_code == 200:
-                    success_count += 1
-                print(f"Segment {i+1} status: {status_code}")
-            except Exception as e:
-                print(f"Error checking segment {i+1}: {e}")
-                status_code = 0
-            
-            total_duration += segment.duration
-            
-            segment_info = {
-                'index': len(playlist.segments) - len(recent_segments) + i + 1,
-                'uri': segment.uri,
-                'duration': segment.duration,
-                'status_code': status_code,
-                'timestamp': datetime.now().isoformat()
-            }
-            live_data['recent_segments'].append(segment_info)
+        processing_time = time.time() - start_time
+        performance_monitor.record_request_time(processing_time)
         
-        live_data['stats']['avg_duration'] = total_duration / len(recent_segments) if recent_segments else 0
-        live_data['stats']['avg_bitrate'] = master_video_info['bitrate'] if master_video_info['bitrate'] > 0 else 0
-        live_data['stats']['total_bitrate_samples'] = 1 if master_video_info['bitrate'] > 0 else 0
-        live_data['stats']['success_rate'] = (success_count / len(recent_segments)) * 100 if recent_segments else 0
-        
-        # Add master playlist video and audio info to response
-        live_data['video_info'] = {
-            'codec': master_video_info['video']['codec'],
-            'width': master_video_info['video']['width'],
-            'height': master_video_info['video']['height'],
-            'resolution': f"{master_video_info['video']['width']}x{master_video_info['video']['height']}" if master_video_info['video']['width'] > 0 else "Unknown",
-            'frame_rate': master_video_info['video']['frame_rate'],
-            'video_bitrate': master_video_info['video']['bitrate'] if master_video_info['video']['bitrate'] > 0 else (master_bitrate if master_bitrate > 0 else 0),
-            'duration': master_video_info['duration'],
-            'source': 'segment_analysis'
-        }
-        
-        live_data['audio_info'] = {
-            'codec': master_video_info['audio']['codec'],
-            'sample_rate': master_video_info['audio']['sample_rate'],
-            'channels': master_video_info['audio']['channels'],
-            'audio_bitrate': master_video_info['audio']['bitrate'],
-            'channel_layout': f"{master_video_info['audio']['channels']} ch" if master_video_info['audio']['channels'] > 0 else "Unknown"
-        }
-        
-        # Update stats to use total bitrate (video + audio)
-        live_data['stats']['avg_bitrate'] = master_video_info['total_bitrate'] if master_video_info['total_bitrate'] > 0 else master_bitrate
-        live_data['stats']['video_bitrate'] = master_video_info['video']['bitrate']
-        live_data['stats']['audio_bitrate'] = master_video_info['audio']['bitrate']
-        
-        print(f"Video info: {live_data['video_info']}")
-        print(f"Audio info: {live_data['audio_info']}")
-        print(f"Master bitrate from playlist: {master_bitrate}")
-        print(f"Video bitrate from ffprobe: {master_video_info['video']['bitrate']}")
-        print(f"Total bitrate: {master_video_info['total_bitrate']}")
-        
-        print(f"Live data prepared successfully. Success rate: {live_data['stats']['success_rate']:.1f}%")
+        logging.info(f"Live metrics processed in {processing_time:.2f}s. Success rate: {success_rate:.1f}%")
         return jsonify(live_data)
         
     except Exception as e:
-        print(f"Error in live-metrics: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': str(e)})
+        performance_monitor.increment_error()
+        logging.error(f"Error in live-metrics: {str(e)}")
+        processing_time = time.time() - start_time
+        performance_monitor.record_request_time(processing_time)
+        return jsonify({'error': str(e), 'processing_time': processing_time})
 
 @app.route('/api/test-url/<path:playlist_url>')
 def test_url(playlist_url):
@@ -528,89 +500,45 @@ def get_segment_details(segment_url):
     except Exception as e:
         return jsonify({'error': str(e)})
 
-@app.route('/api/test-bitrate')
-def test_bitrate():
-    """Test bitrate extraction with manual SSL handling"""
+@app.route('/api/health-check')
+def health_check():
+    """Health check endpoint"""
     try:
-        # Test URL
-        playlist_url = "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_fmp4/master.m3u8"
+        # Record memory usage
+        memory_usage = psutil.virtual_memory().percent
+        performance_monitor.record_memory_usage(memory_usage)
         
-        # Manual loading with SSL disabled
-        session = requests.Session()
-        session.verify = False
-        
-        print(f"Testing with sample playlist...")
-        response = session.get(playlist_url, timeout=10)
-        print(f"HTTP Status: {response.status_code}")
-        
-        if response.status_code == 200:
-            # Parse with m3u8
-            playlist = m3u8.loads(response.text)
-            print(f"Playlist parsed. Is variant: {playlist.is_variant}")
-            
-            if playlist.is_variant and playlist.playlists:
-                variants_info = []
-                total_bitrate = 0
-                for i, variant in enumerate(playlist.playlists):
-                    bandwidth = variant.stream_info.bandwidth if variant.stream_info else 0
-                    resolution = variant.stream_info.resolution if variant.stream_info else None
-                    variants_info.append({
-                        'index': i,
-                        'bandwidth': bandwidth,
-                        'resolution': resolution
-                    })
-                    total_bitrate += bandwidth
-                
-                avg_bitrate = total_bitrate / len(playlist.playlists) if playlist.playlists else 0
-                
-                return jsonify({
-                    'success': True,
-                    'is_variant': True,
-                    'variants': variants_info,
-                    'avg_bitrate': avg_bitrate,
-                    'total_variants': len(playlist.playlists)
-                })
-            else:
-                return jsonify({
-                    'success': True,
-                    'is_variant': False,
-                    'segments_count': len(playlist.segments) if hasattr(playlist, 'segments') else 0
-                })
-        else:
-            return jsonify({
-                'success': False,
-                'error': f'HTTP {response.status_code}'
-            })
-            
-    except Exception as e:
-        print(f"Test error: {str(e)}")
         return jsonify({
-            'success': False,
-            'error': str(e)
+            'status': 'healthy',
+            'timestamp': datetime.now().isoformat(),
+            'memory_usage': f"{memory_usage:.1f}%",
+            'performance': performance_monitor.get_stats()
         })
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
 
 @app.route('/api/system-metrics')
 def get_system_metrics():
-    """Get system metrics for Cockpit.js dashboard"""
+    """Get system performance metrics"""
     try:
-        import psutil
-        import platform
-        
-        # Get system information
-        cpu_percent = psutil.cpu_percent(interval=1)
+        cpu_percent = psutil.cpu_percent(interval=0.1)
         memory = psutil.virtual_memory()
         disk = psutil.disk_usage('/')
         
-        # Get network information
-        network = psutil.net_io_counters()
+        # Network info (if available)
+        network_info = {}
+        try:
+            network_stats = psutil.net_io_counters()
+            network_info = {
+                'bytes_sent': network_stats.bytes_sent,
+                'bytes_recv': network_stats.bytes_recv,
+                'packets_sent': network_stats.packets_sent,
+                'packets_recv': network_stats.packets_recv
+            }
+        except:
+            pass
         
-        metrics = {
-            'timestamp': datetime.now().isoformat(),
-            'system': {
-                'platform': platform.system(),
-                'architecture': platform.architecture()[0],
-                'hostname': platform.node()
-            },
+        return jsonify({
             'cpu': {
                 'usage_percent': cpu_percent,
                 'count': psutil.cpu_count()
@@ -618,8 +546,8 @@ def get_system_metrics():
             'memory': {
                 'total': memory.total,
                 'available': memory.available,
-                'used': memory.used,
-                'percent': memory.percent
+                'percent': memory.percent,
+                'used': memory.used
             },
             'disk': {
                 'total': disk.total,
@@ -627,59 +555,32 @@ def get_system_metrics():
                 'free': disk.free,
                 'percent': (disk.used / disk.total) * 100
             },
-            'network': {
-                'bytes_sent': network.bytes_sent,
-                'bytes_recv': network.bytes_recv,
-                'packets_sent': network.packets_sent,
-                'packets_recv': network.packets_recv
-            }
-        }
-        
-        return jsonify(metrics)
-        
-    except ImportError:
-        # psutil not available, return simulated metrics
-        return jsonify({
-            'timestamp': datetime.now().isoformat(),
-            'system': {
-                'platform': 'Unknown',
-                'architecture': 'x64',
-                'hostname': 'hls-analyzer'
-            },
-            'cpu': {
-                'usage_percent': 25.0,
-                'count': 4
-            },
-            'memory': {
-                'total': 8589934592,  # 8GB
-                'available': 4294967296,  # 4GB
-                'used': 4294967296,  # 4GB
-                'percent': 50.0
-            },
-            'disk': {
-                'total': 1099511627776,  # 1TB
-                'used': 549755813888,   # 512GB
-                'free': 549755813888,   # 512GB
-                'percent': 50.0
-            },
-            'network': {
-                'bytes_sent': 1024000,
-                'bytes_recv': 2048000,
-                'packets_sent': 1000,
-                'packets_recv': 2000
-            }
+            'network': network_info,
+            'timestamp': datetime.now().isoformat()
         })
     except Exception as e:
         return jsonify({'error': str(e)})
 
-@app.route('/api/health-check')
-def health_check():
-    """Health check endpoint"""
-    return jsonify({
-        'status': 'healthy',
-        'timestamp': datetime.now().isoformat(),
-        'ffprobe_available': check_ffprobe_availability()
-    })
+@app.route('/api/performance-stats')
+def get_performance_stats():
+    """Get application performance statistics"""
+    stats = performance_monitor.get_stats()
+    stats['adaptive_refresh_interval'] = live_metrics['adaptive_refresh'].get_optimal_interval()
+    stats['cache_size'] = len(live_metrics['segments'])
+    stats['last_updated'] = live_metrics['last_updated'].isoformat() if live_metrics['last_updated'] else None
+    
+    return jsonify(stats)
+
+# Cleanup function
+@app.teardown_appcontext
+def cleanup(error):
+    """Cleanup resources after each request"""
+    if error:
+        performance_monitor.increment_error()
+
+# Register cleanup on app shutdown
+import atexit
+atexit.register(cleanup_resources)
 
 if __name__ == '__main__':
     # Security: Binds to localhost only by default

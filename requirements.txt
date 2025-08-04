@@ -11,8 +11,8 @@ m3u8==4.0.0
 # HTTP Requests
 requests==2.31.0
 
-# Optional: System Metrics (install separately for advanced monitoring)
-# psutil>=5.8.0
+# System Metrics for Performance Monitoring
+psutil>=5.8.0
 
 # Note: FFmpeg/FFprobe is required for advanced video analysis
 # Install separately based on your operating system:
